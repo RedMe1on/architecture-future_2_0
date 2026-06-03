@@ -1,0 +1,79 @@
+@startuml
+!include <C4/C4_Context.puml>
+
+LAYOUT_WITH_LEGEND()
+
+title Data Flow Diagram — Потоки данных между доменами
+
+' ========== ВНЕШНИЕ СИСТЕМЫ ==========
+System_Ext(pharma, "Фарм-компании", "Справочники лекарств, поставки, инвойсы")
+System_Ext(electronics, "Производитель электроники", "Телеметрия оборудования, калибровка")
+System_Ext(legacy_dwh, "Легаси DWH (SQL Server 2008)", "Исторические данные (выводится)")
+
+' ========== ДОМЕНЫ ==========
+System(kafka, "Событийная шина (Kafka)", "Асинхронные доменные события, буферизация, replay")
+
+System(clinic, "Домен: Клиники", "Запись пациентов, инвентаризация,\nперсонал, медкарты, истории")
+System(fintech, "Домен: Финтех", "Счета, кредиты, транзакции,\nплатежи")
+System(ai, "Домен: ИИ-сервисы", "ML-модели, анализ\nмедданных, диагностика")
+System(hq, "Домен: Головной офис", "Управленческие KPI,\nбюджеты, OKR, отчётность")
+System(partners, "Домен: Партнёры", "Интеграция фармы и\nпроизводителей электроники")
+System(vitrina, "Витрина данных", "ClickHouse\nАгрегированные обезличенные\nметрики для отчётов")
+
+' ========== ПОТОКИ ДАННЫХ ==========
+
+' === Внешние → Партнёрский домен (через Kafka) ===
+Rel(pharma, partners, "DrugCatalogs, SupplierInfo,\nDeliveryInvoices", "HTTPS / REST")
+Rel(electronics, partners, "EquipmentTelemetry,\nCalibrationLogs", "HTTPS / MQTT")
+
+' === Домены → Kafka ===
+Rel(clinic, kafka, "AppointmentCreated, InventoryChanged,\nEquipmentUsed, StaffSchedule", "Producer")
+Rel(fintech, kafka, "TransactionCompleted, LoanIssued,\nAccountChanged, PaymentReceived", "Producer")
+Rel(ai, kafka, "DiagnosisMeta (только мета!),\nModelPerformance, PredictionStats", "Producer")
+Rel(hq, kafka, "KPICalculated, BudgetPeriodClosed,\nMonthlyReportReady", "Producer")
+Rel(partners, kafka, "DrugCatalogUpdate, SupplierInvoice,\nEquipmentTelemetryEvent", "Producer")
+
+' === Kafka → Домены (потребление) ===
+Rel(kafka, clinic, "DrugCatalogUpdate (назначения),\nEquipmentTelemetry (инвентаризация)", "Consumer")
+Rel(kafka, fintech, "SupplierInvoice (кредитование\nфарм-поставок)", "Consumer")
+Rel(kafka, ai, "EquipmentTelemetry (предиктивное\nобслуживание моделей)", "Consumer")
+Rel(kafka, hq, "Доменные события для\nконсолидации KPI", "Consumer")
+Rel(kafka, partners, "Команды маршрутизации", "Consumer")
+
+' === Синхронный обмен (защищённый) ===
+Rel(clinic, ai, "MedicalData (диагностические\nданные для инференса)", "gRPC (защищённый)")
+Rel(ai, clinic, "AIRecommendation\n(результаты диагностики)", "gRPC (защищённый)")
+
+' === Витрина ===
+Rel(kafka, vitrina, "AppointmentMeta (число обращений),\nTransactionSummary, InventoryStats,\nModelMeta", "Consumer")
+Rel(vitrina, hq, "Агрегированные KPI\nдля управленческой отчётности", "BI / SQL")
+Rel(vitrina, legacy_dwh, "Исторические данные\n(на время миграции)", "ODBC (read-only)")
+
+' === Партнёрский домен → остальные (синхронные вызовы при необходимости) ===
+Rel(partners, clinic, "DrugCatalog (синхронный\nзапрос при отсутствии в Kafka)", "REST (fallback)")
+Rel(partners, fintech, "SupplierInvoice (синхронный\nзапрос при отсутствии в Kafka)", "REST (fallback)")
+
+' === Ограничение витрины ===
+Note bottom of vitrina
+    <b>В ВИТРИНЕ НЕТ:</b>
+    ✗ Медицинских карт, историй болезней
+    ✗ Результатов исследований
+    ✗ Персональных данных пациентов
+
+    <b>В ВИТРИНЕ ЕСТЬ:</b>
+    ✓ Количество обращений по клиникам
+    ✓ Средний чек / загрузка оборудования
+    ✓ Финансовые KPI (обезличенные)
+    ✓ Метрики производительности ИИ
+end note
+
+' === Пояснение ===
+Note left of kafka
+    Единая событийная шина.
+    Каждый домен владеет своими
+    событиями. События = контракт
+    между доменами.
+end note
+
+SHOW_LEGEND()
+@enduml
