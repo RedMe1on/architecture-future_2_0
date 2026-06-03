@@ -1,0 +1,122 @@
+@startuml
+!include <C4/C4_Container.puml>
+
+LAYOUT_WITH_LEGEND()
+
+title Компонентная схема развёртывания — Будущее 2.0
+
+' ===== СТИЛИ: Terraform vs Manual =====
+' Компоненты, управляемые Terraform, имеют зелёную границу
+' Компоненты, разворачиваемые вручную, — синюю
+
+' ===== ВНЕШНИЕ КЛИЕНТЫ =====
+Person(user, "Пользователи", "Врачи, операторы,\nаналитики, менеджеры")
+Person(partner, "Внешние партнёры", "Фарма, производители\nэлектроники")
+
+' ===== ОБЛАЧНАЯ ИНФРАСТРУКТУРА (Terraform) =====
+System_Boundary(cloud, "Облачная инфраструктура (Terraform)") {
+
+    ' ---- VPC / NETWORK ----
+    Boundary(network, "Сеть (Terraform)") {
+        System(vpc, "VPC", "10.0.0.0/16")
+        System(sub_pub, "Public Subnets", "10.0.1-3.0/24\nBastion, NAT GW, LB")
+        System(sub_priv, "Private Subnets", "10.0.10-20.0/24\nВсе сервисы")
+        System(igw, "Internet Gateway", "")
+        System(nat, "NAT Gateway", "Outbound from private")
+        System(alblb, "ALB / NLB", "Балансировщики\nнагрузки")
+    }
+
+    ' ---- COMPUTE / STORAGE ----
+    Boundary(compute, "Вычислительные ресурсы (Terraform)") {
+
+        System(k8s_cp, "K8s Control Plane", "3 VM\n4 vCPU, 16 GB\n100 GB SSD\nУправление K8s")
+        System(k8s_worker, "K8s Workers", "3 VM\n8 vCPU, 32 GB\n200 GB SSD\nПриложения доменов")
+
+        System(kafka, "Kafka Brokers", "3 VM\n4 vCPU, 16 GB\n200 GB SSD\nСобытийная шина")
+        System(clickhouse, "ClickHouse Nodes", "3 VM\n8 vCPU, 32 GB\n500 GB SSD\nOLAP-витрина")
+        System(postgres, "PostgreSQL", "1 Primary + 1 Replica\n4 vCPU, 16 GB\n200 GB SSD\nДоменные БД")
+        System(cockroach, "CockroachDB", "3 Node\n4 vCPU, 16 GB\n100 GB SSD\nФинтех-БД")
+        System(minio, "MinIO (S3)", "3 Node\n4 vCPU, 16 GB\n500 GB HDD\nОбъектное хранилище")
+        System(apigw, "API Gateway", "2 VM (Kong)\n4 vCPU, 8 GB\n50 GB SSD")
+
+        System(bastion, "Bastion Host", "1 VM\n2 vCPU, 8 GB\n50 GB SSD\nУправление")
+        System(monitoring, "Monitoring", "1 VM (Prometheus+Grafana)\n4 vCPU, 16 GB\n200 GB SSD")
+    }
+
+    ' ---- SECURITY ----
+    Boundary(security, "Безопасность (Terraform)") {
+        System(sg, "Security Groups", "Firewall rules\nпо сервисам")
+        System(iam, "IAM Roles", "Service accounts,\nполитики доступа")
+    }
+}
+
+' ===== ПРИЛОЖЕНИЯ (Manual / Helm) =====
+System_Boundary(apps, "Приложения (Manual / Helm)") {
+    System(k8s_api, "Domain APIs (K8s)", "Clinic API, Fintech API,\nHQ API, Partner API")
+    System(superset, "Apache Superset", "Портал самообслуживания")
+    System(datahub, "DataHub", "Каталог данных")
+    System(mlflow, "MLflow", "Реестр ML-моделей")
+    System(keycloak, "Keycloak + OPA", "IAM, RBAC, аудит")
+    System(debezium, "Debezium", "CDC из легаси")
+    System(fluentd, "Fluentd / Vector", "Сбор логов")
+}
+
+' ===== ЛЕГАСИ (временная зона) =====
+System_Ext(legacy, "Легаси-зона", "SQL Server 2008\nPowerBuilder\nApache Camel")
+
+' ===== ПОТОКИ =====
+
+' Сеть → Compute
+Rel(vpc, sub_pub, "Содержит", "")
+Rel(vpc, sub_priv, "Содержит", "")
+Rel(sub_pub, bastion, "Bastion в public subnet", "")
+Rel(sub_priv, k8s_cp, "", "10.0.10.0/24")
+Rel(sub_priv, k8s_worker, "", "10.0.11.0/24")
+Rel(sub_priv, kafka, "", "10.0.12.0/24")
+Rel(sub_priv, clickhouse, "", "10.0.13.0/24")
+Rel(sub_priv, postgres, "", "10.0.14.0/24")
+Rel(sub_priv, cockroach, "", "10.0.15.0/24")
+Rel(sub_priv, minio, "", "10.0.16.0/24")
+Rel(sub_priv, apigw, "", "10.0.17.0/24")
+Rel(sub_priv, monitoring, "", "10.0.18.0/24")
+
+' NAT
+Rel(nat, sub_priv, "Outbound internet", "")
+Rel(igw, nat, "Internet → NAT", "")
+Rel(igw, sub_pub, "Internet → Public", "")
+
+' LB → Compute
+Rel(alblb, apigw, "Load balance", "")
+Rel(alblb, superset, "Load balance", "")
+
+' Compute ← Security
+Rel(sg, k8s_cp, "Restrict access", "")
+Rel(sg, kafka, "9092 only from apps", "")
+Rel(sg, clickhouse, "8123 only from Superset", "")
+Rel(sg, postgres, "5432 only from K8s", "")
+
+' Приложения на K8s
+Rel(k8s_worker, k8s_api, "Хостинг", "")
+Rel(k8s_worker, superset, "Хостинг", "")
+Rel(k8s_worker, datahub, "Хостинг", "")
+Rel(k8s_worker, mlflow, "Хостинг", "")
+Rel(k8s_worker, keycloak, "Хостинг", "")
+Rel(k8s_worker, debezium, "Хостинг", "")
+
+' Связи приложений с сервисами
+Rel(kafka, debezium, "CDC stream", "")
+Rel(legacy, debezium, "Logical replication", "")
+Rel(superset, clickhouse, "SQL-запросы", "8123/tcp")
+Rel(k8s_api, postgres, "Domain data", "5432/tcp")
+Rel(k8s_api, kafka, "Domain events", "9092/tcp")
+Rel(k8s_api, cockroach, "Fintech data", "26257/tcp")
+Rel(k8s_api, minio, "File storage", "9000/tcp")
+
+' Пользователи
+Rel(user, alblb, "HTTPS", "")
+Rel(user, superset, "Build reports", "")
+Rel(partner, apigw, "API integration", "HTTPS")
+Rel(apigw, kafka, "Partner events", "9092/tcp")
+
+SHOW_LEGEND()
+@enduml
