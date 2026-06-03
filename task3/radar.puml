@@ -1,0 +1,92 @@
+@startuml
+!include <C4/C4_Context.puml>
+
+LAYOUT_WITH_LEGEND()
+
+title Технологический радар — Будущее 2.0
+
+' ===== ВНЕШНЕЕ КОЛЬЦО: HOLD (отказ) =====
+System_Boundary(hold, "#HOLD — отказ от легаси") {
+    System(legacy_dwh, "SQL Server 2008", "Монолитный DWH")
+    System(powerbuilder, "PowerBuilder", "Интерфейс операторов")
+    System(camel, "Apache Camel", "Старая ESB")
+    System(powerbi, "Power BI (кастомизации)", "BI, привязанный к DWH")
+}
+
+' ===== КОЛЬЦО 2: ASSESS (изучаем) =====
+System_Boundary(assess, "#ASSESS — изучаем") {
+    System(dbt, "dbt", "Трансформации в витрине\nCI/CD, версионирование")
+    System(expectations, "Great Expectations", "Качество данных\nпрофилирование, мониторинг")
+    System(iceberg, "Apache Iceberg / Delta Lake", "Озеро данных\nACID, time-travel")
+}
+
+' ===== КОЛЬЦО 1: TRIAL (пилотируем) =====
+System_Boundary(trial, "#TRIAL — пилотируем") {
+    System(mesh, "Data Mesh", "Доменная архитектура\nнезависимые команды")
+    System(datahub, "DataHub / Amundsen", "Каталог данных\nпоиск, линидж")
+    System(crdb, "CockroachDB", "Геораспределённая БД\nфинтех, отказоустойчивость")
+    System(superset, "Apache Superset", "Портал самообслуживания\nконструктор дашбордов")
+    System(s3, "S3 / MinIO", "Объектное хранилище\nML-артефакты, датасеты")
+}
+
+' ===== ЦЕНТР: ADOPT (внедряем) =====
+System_Boundary(adopt, "#ADOPT — внедряем") {
+    System(k8s, "Kubernetes", "Оркестрация, автоскейлинг\nединая платформа")
+    System(kafka, "Apache Kafka", "Событийная шина\nасинхронная интеграция доменов")
+    System(ch, "ClickHouse", "OLAP-витрина\nсекундные отчёты")
+    System(pg, "PostgreSQL", "Основная БД доменов\nклиники, HQ, партнёры")
+    System(keycloak, "Keycloak + OPA", "IAM, RBAC, маскирование\nаудит, compliance")
+    System(debezium, "Debezium", "CDC из легаси\nмиграция без остановки")
+    System(gateway, "Kong / Traefik", "API Gateway\nпартнёрская интеграция")
+    System(mlflow, "MLflow", "Реестр ML-моделей\nэксперименты, деплой")
+    System(terraform, "Terraform", "Infrastructure as Code\nсреды для новых доменов")
+    System(mon, "Prometheus + Grafana", "Мониторинг, алертинг\nSLA, наблюдаемость")
+}
+
+' ===== СВЯЗИ: что чем заменяем =====
+Rel(legacy_dwh, kafka, "Замена: CDC + доменные БД", "Debezium → Kafka")
+Rel(powerbuilder, superset, "Замена: портал + новый UI", "Superset + SPA")
+Rel(camel, kafka, "Замена: более надёжная шина", "Kafka вместо Camel")
+Rel(powerbi, ch, "Замена: ClickHouse + Superset", "OLAP + Self-Service")
+Rel(legacy_dwh, pg, "Миграция данных", "PostgreSQL per domain")
+Rel(legacy_dwh, crdb, "Миграция финтех-данных", "CockroachDB geo-distributed")
+
+' ===== БИЗНЕС-СЦЕНАРИИ (заметки) =====
+Note bottom of legacy_dwh
+  Сценарий: Все отчёты,
+  интеграции, хранение
+  (сейчас — bottleneck)
+end note
+
+Note bottom of kafka
+  Сценарий: Интеграция
+  финтеха, ИИ, партнёров
+  без изменения DWH
+end note
+
+Note bottom of ch
+  Сценарий: Быстрая
+  аналитика, сложные
+  отчёты за секунды
+end note
+
+Note bottom of mesh
+  Сценарий: Новые бизнесы
+  (фарма, электроника)
+  подключаются как домены
+end note
+
+Note bottom of gateway
+  Сценарий: Единая точка
+  для внешних партнёров
+  rate limiting, JWT
+end note
+
+Note bottom of keycloak
+  Сценарий: Безопасность
+  медданных, финданных
+  разграничение доступа
+end note
+
+SHOW_LEGEND()
+@enduml
