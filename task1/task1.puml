@@ -1,0 +1,127 @@
+@startuml
+!include <C4/C4_Container.puml>
+
+LAYOUT_WITH_LEGEND()
+
+title Будущее 2.0 — целевая архитектура через 1 год (финальная)
+
+' === Пользователи и внешние системы ===
+Person(business_user, "Бизнес-пользователь", "Аналитик, менеджер, оператор")
+Person(fintech_dev, "Разработчик финтеха", "Golang/Java")
+Person(ai_dev, "Разработчик ИИ", "Python")
+System_Ext(pharma, "Фарм-компании", "Внешние партнёры")
+System_Ext(electronics, "Производитель электроники", "Поставщик оборудования")
+
+System_Boundary(future2, "Будущее 2.0") {
+    Boundary(cloud, "Облачная инфраструктура (k8s / managed services)") {
+        
+        ' === API Gateway только для внешних ===
+        Container(api_gateway, "API Gateway (External)", "Kong / Traefik", "Только для внешних партнёров. Маршрутизация, rate limiting, JWT-валидация.")
+        
+        ' === Портал самообслуживания ===
+        Container(portal, "Портал самообслуживания", "React + Apache Superset", "Конструктор отчётов, дашборды, RBAC. Без медицинских карт.")
+        
+        ' === Витрина данных ===
+        Container(analytics_vitrina, "Витрина данных (OLAP)", "ClickHouse / Snowflake", "Агрегированные финансовые, операционные и клиентские данные. Только обезличенные метрики.")
+        
+        ' === Событийная шина ===
+        Container(kafka, "Событийная шина", "Apache Kafka + Debezium", "Доменные события, CDC из легаси, буферизация, replay. Замена старой ESB.")
+        
+        ' === Аудит ===
+        Container(audit, "Audit & Compliance", "Kafka Streams / Java", "Аудит доступа к данным, логирование запросов API и действий пользователей.")
+        
+        ' === Каталог данных ===
+        Container(data_catalog, "Каталог данных", "Amundsen / DataHub", "Поиск датасетов, линидж, описание полей, управление доступом.")
+        
+        ' === IAM ===
+        Container(security, "IAM & Data Governance", "Keycloak + OpenPolicyAgent", "Политики доступа на уровне строк/столбцов, аудит, маскирование медданных.")
+        
+        ' === Объединённая легаси-зона ===
+        Container(legacy, "Legacy Systems (выводятся через 6-12 месяцев)", "SQL Server 2008 + PowerBuilder + Camel ESB", "Только для чтения исторических данных и временной поддержки старых процессов.")
+        
+        ' === Детализированные домены ===
+        Boundary(domains, "Домены (Data Mesh)") {
+            
+            ' Домен Клиники
+            Container(domain_clinics_api, "Clinic API", "Java / Spring Boot", "Управление записями, инвентаризацией, персоналом. Не содержит медкарт.")
+            Container(domain_clinics_db, "Clinic DB", "PostgreSQL", "Операционные данные: клиенты, расписания, оборудование, сотрудники.")
+            Container(domain_clinics_events, "Clinic Event Publisher", "Kafka Producer", "Публикует события о записях, изменениях инвентаризации.")
+            
+            ' Домен Финтех
+            Container(domain_fintech_api, "Fintech API", "Go / gRPC", "Счета, кредиты, транзакции, банковские продукты.")
+            Container(domain_fintech_db, "Fintech DB", "CockroachDB", "Финансовые операционные данные (распределённая БД).")
+            Container(domain_fintech_events, "Fintech Event Publisher", "Kafka Producer", "Публикует события транзакций, изменения счетов, кредитные события.")
+            
+            ' Домен ИИ-сервисы
+            Container(domain_ai_api, "AI Inference API", "Python / FastAPI", "Предсказания, обработка медицинских данных (только мета-информация).")
+            Container(domain_ai_models, "Model Registry", "MLflow + S3", "Хранилище моделей, артефактов, мета-информации обучений.")
+            Container(domain_ai_meta, "AI Metadata DB", "PostgreSQL", "Агрегаты результатов, статистика по обработке, без сырых медданных.")
+            
+            ' Домен Головной офис
+            Container(domain_hq_api, "HQ API", "Java / REST", "Финансовая отчётность, OKR, управленческие KPI.")
+            Container(domain_hq_db, "HQ DB", "PostgreSQL", "Планы, бюджеты, стратегические показатели.")
+        }
+    }
+}
+
+' === Внешние подключения только через API Gateway ===
+Rel(pharma, api_gateway, "Интеграция (справочники, поставки)", "HTTPS / REST")
+Rel(electronics, api_gateway, "Телеметрия оборудования, инвентаризация", "HTTPS / MQTT over WebSocket")
+Rel(api_gateway, kafka, "Публикация событий от партнёров", "Kafka producer")
+Rel(api_gateway, security, "JWT-валидация", "OIDC")
+Rel(api_gateway, audit, "Логирование запросов", "async / Kafka")
+
+' === Портал самообслуживания ===
+Rel(business_user, portal, "Строит отчёты", "HTTPS")
+Rel(portal, analytics_vitrina, "Запросы аналитики (SQL/MDX)", "JDBC/REST")
+Rel(portal, data_catalog, "Поиск наборов данных", "API")
+Rel(portal, security, "Проверка прав пользователя", "OPA")
+Rel(portal, audit, "Логирует действия пользователя", "async")
+
+' === Доменные API (разработчики работают напрямую, без API Gateway) ===
+Rel(fintech_dev, domain_fintech_api, "Развивает API", "gRPC")
+Rel(ai_dev, domain_ai_api, "Развивает модели и API", "REST")
+' Для внутренних вызовов между доменами (если нужно) можно использовать внутренний Service Mesh, но для простоты опустим.
+
+' === Внутренние связи доменов с БД и событиями ===
+Rel(domain_clinics_api, domain_clinics_db, "CRUD", "SQL")
+Rel(domain_clinics_api, domain_clinics_events, "Публикация событий", "Kafka")
+Rel(domain_clinics_events, kafka, "Отправка событий", "Producer")
+
+Rel(domain_fintech_api, domain_fintech_db, "CRUD", "SQL")
+Rel(domain_fintech_api, domain_fintech_events, "Публикация событий", "Kafka")
+Rel(domain_fintech_events, kafka, "Отправка событий", "Producer")
+
+Rel(domain_ai_api, domain_ai_models, "Загрузка моделей", "MLflow API")
+Rel(domain_ai_api, domain_ai_meta, "Сохранение мета-информации", "SQL")
+Rel(domain_ai_api, kafka, "Публикация мета-событий", "Producer")
+
+Rel(domain_hq_api, domain_hq_db, "CRUD", "SQL")
+Rel(domain_hq_api, kafka, "Публикация отчётных периодов и KPI", "Producer")
+
+' === Легаси-система ===
+Rel(legacy, kafka, "CDC изменения (Debezium)", "CDC")
+Rel(legacy, domain_clinics_api, "Временная синхронизация (на период миграции)", "API")
+
+' === Витрина данных потребляет события ===
+Rel(kafka, analytics_vitrina, "Потоки фактов и измерений", "Consumer")
+Rel(analytics_vitrina, legacy, "Читает исторические данные (только legacy DWH)", "ODBC (read-only)")
+
+' === Безопасность и аудит ===
+Rel(domain_ai_api, security, "Проверка доступа к метаданным", "OPA")
+Rel(security, audit, "События авторизации", "async")
+Rel(data_catalog, security, "Синхронизация политик доступа", "API")
+
+' === Пояснение по ограничениям ===
+Note bottom of analytics_vitrina
+  <b>Нет медицинских карт, историй болезней,
+  результатов исследований.</b>
+  Только обезличенные метрики:
+  - Кол-во обращений по клинике
+  - Средний чек лечения
+  - Загрузка оборудования
+  - Финансовые KPI
+end note
+
+SHOW_LEGEND()
+@enduml
