@@ -1,0 +1,142 @@
+@startuml
+!include <C4/C4_Context.puml>
+
+LAYOUT_WITH_LEGEND()
+
+title Data Flow Diagram — Декомпозиция доменов и потоки данных
+
+' ========== ВНЕШНИЕ СИСТЕМЫ ==========
+Person(business_user, "Бизнес-пользователь", "Аналитик, менеджер, оператор")
+Person(fintech_dev, "Разработчик финтеха", "Golang / Java")
+Person(ai_ml_dev, "Разработчик ИИ", "Python")
+
+System_Ext(pharma, "Фарм-компании (будущие партнёры)", "Справочники лекарств, поставки")
+System_Ext(electronics, "Производитель электроники (будущий партнёр)", "Телеметрия оборудования, калибровка")
+System_Ext(legacy_dwh, "Легаси DWH (SQL Server 2008)", "Выводится из эксплуатации")
+System_Ext(legacy_camel, "Старая ESB (Apache Camel)", "Заменяется на Kafka")
+
+
+' ========== ЦЕЛЕВАЯ АРХИТЕКТУРА — ДОМЕНЫ ==========
+System_Boundary(target, "Целевая архитектура (облачная инфраструктура)") {
+
+    ' ---- Интеграционный слой ----
+    System(api_gateway, "API Gateway", "Единая точка входа для внешних партнёров")
+    System(kafka, "Событийная шина (Kafka)", "Замена ESB. Асинхронные доменные события, CDC, буферизация, replay")
+
+    ' ---- ДОМЕН 1: Клинический ----
+    System_Boundary(bound_clinic, "Домен: Клиники") {
+        System(clinic_api, "Clinic API", "Управление записью, инвентаризацией, персоналом")
+        SystemDb(clinic_db, "Clinic DB", "PostgreSQL\nПациенты, расписания, инвентарь, персонал")
+        System(clinic_kafka, "Publisher", "Публикует операционные события")
+    }
+
+    ' ---- ДОМЕН 2: Финтех ----
+    System_Boundary(bound_fintech, "Домен: Финтех") {
+        System(fintech_api, "Fintech API", "Счета, кредиты, транзакции")
+        SystemDb(fintech_db, "Fintech DB", "CockroachDB\n(геораспределённая)")
+        System(fintech_kafka, "Publisher", "Публикует финансовые события")
+    }
+
+    ' ---- ДОМЕН 3: ИИ-сервисы ----
+    System_Boundary(bound_ai, "Домен: ИИ-сервисы") {
+        System(ai_api, "AI Inference API", "FastAPI\nИнференс моделей для диагностики")
+        SystemDb(ai_models, "Model Registry", "MLflow + S3\nМодели и артефакты")
+        SystemDb(ai_meta, "AI Meta DB", "PostgreSQL\nМета-информация (без сырых медданных)")
+    }
+
+    ' ---- ДОМЕН 4: Головной офис ----
+    System_Boundary(bound_hq, "Домен: Головной офис") {
+        System(hq_api, "HQ API", "Управленческие KPI, бюджеты")
+        SystemDb(hq_db, "HQ DB", "PostgreSQL\nПланы, OKR, стратегия")
+    }
+
+    ' ---- ДОМЕН 5: Партнёры ----
+    System_Boundary(bound_partners, "Домен: Партнёры") {
+        System(partner_api, "Partner API", "Маршрутизация данных фармы и электроники")
+        SystemDb(partner_db, "Partner DB", "PostgreSQL\nКонтракты, мета-данные партнёров")
+    }
+
+    ' ---- ПЛАТФОРМА ДАННЫХ ----
+    System_Boundary(bound_data, "Платформа данных (Витрина)") {
+        System(data_catalog, "Каталог данных", "DataHub\nПоиск датасетов, линидж")
+        System(vitrina, "Витрина данных (OLAP)", "ClickHouse\nАгрегаты, обезличенные метрики")
+        System(portal, "Портал самообслуживания", "Superset\nКонструктор отчётов, дашборды")
+        System(audit, "Audit & IAM", "Keycloak + OPA\nRBAC, маскирование, аудит")
+    }
+}
+
+
+' ========== ПОТОКИ ДАННЫХ ==========
+
+' === Партнёры → API Gateway → Kafka ===
+Rel(pharma, api_gateway, "Drug catalogs, Supplier info", "HTTPS / REST")
+Rel(electronics, api_gateway, "Equipment telemetry, Calibration", "HTTPS / MQTT")
+Rel(api_gateway, kafka, "Partner events", "Kafka Producer")
+
+' === Домены публикуют события в Kafka ===
+Rel(clinic_api, clinic_kafka, "AppointmentCreated\nInventoryChanged\nEquipmentUsed", "Async")
+Rel(clinic_kafka, kafka, "Clinical events", "Kafka Producer")
+
+Rel(fintech_api, fintech_kafka, "TransactionCompleted\nLoanIssued\nAccountChanged", "Async")
+Rel(fintech_kafka, kafka, "Fintech events", "Kafka Producer")
+
+Rel(ai_api, kafka, "DiagnosisMeta (только мета!)\nModelPerformance", "Kafka Producer")
+
+Rel(hq_api, kafka, "KPICalculated\nBudgetPeriodClosed", "Kafka Producer")
+
+' === Партнёрский домен маршрутизирует ===
+Rel(partner_api, kafka, "DrugCatalog update\nSupplierInvoice\nEquipmentTelemetry", "Kafka Producer")
+
+' === Внутренние синхронные потоки (защищённый периметр) ===
+Rel(clinic_api, ai_api, "Medical data for inference\n(диагностические данные)", "gRPC (защищённый канал)")
+Rel(ai_api, clinic_api, "AIRecommendation\n(результаты диагностики)", "gRPC (защищённый канал)")
+
+' === Kafka → Витрина (только обезличенные данные) ===
+Rel(kafka, vitrina, "AppointmentMeta (число обращений)\nTransactionSummary\nInventoryStats\nModelMeta", "Kafka Consumer")
+
+' === Витрина → Портал ===
+Rel(business_user, portal, "Строит отчёты", "HTTPS")
+Rel(portal, vitrina, "Аналитические запросы", "JDBC / REST")
+Rel(portal, data_catalog, "Поиск наборов данных", "API")
+Rel(portal, audit, "Проверка прав, аудит действий", "OPA")
+
+' === Взаимодействие доменов через Kafka ===
+Rel(kafka, clinic_api, "DrugCatalog (назначения)\nEquipmentTelemetry (инвентаризация)", "Kafka Consumer")
+Rel(kafka, fintech_api, "SupplierInvoice (кредитование поставок)", "Kafka Consumer")
+Rel(kafka, ai_api, "EquipmentTelemetry (предиктивное обслуживание)", "Kafka Consumer")
+Rel(kafka, hq_api, "Aggregated KPIs for consolidation", "Kafka Consumer")
+Rel(kafka, partner_api, "Routing commands", "Kafka Consumer")
+
+' === Легаси — CDC в Kafka ===
+Rel(legacy_dwh, kafka, "CDC (Debezium)\nИсторические данные на период миграции", "CDC")
+Rel(legacy_camel, kafka, "Мост для старых интеграций (временный)", "Bridge")
+
+' === Разработчики работают напрямую с доменами ===
+Rel(fintech_dev, fintech_api, "Развивает API, новые продукты", "gRPC")
+Rel(ai_ml_dev, ai_api, "Обучает модели, деплоит", "Python SDK")
+
+' === Graph: ограничение на данные в витрине ===
+Note bottom of vitrina
+    <b>В ВИТРИНЕ НЕТ:</b>
+    ✗ Медицинских карт
+    ✗ Историй болезней
+    ✗ Результатов исследований
+    ✗ Персональных данных пациентов
+
+    <b>В ВИТРИНЕ ЕСТЬ:</b>
+    ✓ Количество обращений по клиникам
+    ✓ Средний чек лечения
+    ✓ Загрузка оборудования
+    ✓ Финансовые KPI (обезличенные)
+    ✓ Метрики производительности ИИ-моделей
+end note
+
+' === Пояснение ===
+Note left of kafka
+    Kafka — единая событийная шина.
+    Каждый домен владеет своими событиями.
+    События — контракт между доменами.
+end note
+
+SHOW_LEGEND()
+@enduml

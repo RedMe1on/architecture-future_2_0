@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  terraform:
+    image: hashicorp/terraform:1.9.0
+    container_name: future-terraform
+    working_dir: /workspace
+    volumes:
+      - ./demo.tf:/workspace/main.tf
+      - ./generated:/workspace/generated
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "=== 1. Terraform init ==="
+        terraform init -input=false &&
+
+        echo "" &&
+        echo "=== 2. Terraform plan ===" &&
+        terraform plan -input=false &&
+
+        echo "" &&
+        echo "=== 3. Terraform apply ===" &&
+        terraform apply -auto-approve -input=false &&
+
+        echo "" &&
+        echo "=== 4. Terraform state list ===" &&
+        terraform state list &&
+
+        echo "" &&
+        echo "=== Apply complete! ==="
+    environment:
+      - TF_IN_AUTOMATION=1
+      - TF_CLI_ARGS=-no-color
